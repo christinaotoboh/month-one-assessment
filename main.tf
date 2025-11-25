@@ -92,6 +92,23 @@ resource "aws_route_table_association" "public2" {
 }
 
 
+resource "aws_nat_gateway" "pub_nat1" {
+  subnet_id     = aws_subnet.public.id
+  tags = {
+    Name = "gw NAT"
+  }
+  depends_on = aws_internet_gateway.techcorp-igw
+}
+resource "aws_nat_gateway" "pub_nat2" {
+  subnet_id     = aws_subnet.public2.id
+  tags = {
+    Name = "gw NAT2"
+  }
+  depends_on = aws_internet_gateway.techcorp-igw
+}
+
+
+
 
 resource "aws_instance" "my_instance" {
   ami           = "ami-01b799c439fd5516a"
