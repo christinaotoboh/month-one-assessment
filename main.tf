@@ -12,6 +12,22 @@ provider "aws" {
   region = var.aws_region
 }
 
+# Data source for availability zones
+data "aws_availability_zones" "available" {
+  state = "available"
+}
+
+# Data source for latest Amazon Linux 2 AMI
+data "aws_ami" "amazon_linux_2" {
+  most_recent = true
+  owners      = ["amazon"]
+
+  filter {
+    name   = "name"
+    values = ["amzn2-ami-hvm-*-x86_64-gp2"]
+  }
+}
+
 # VPC
 resource "aws_vpc" "main" {
   cidr_block           = "10.0.0.0/16"
@@ -99,6 +115,7 @@ resource "aws_eip" "nat_2" {
 resource "aws_nat_gateway" "nat_1" {
   allocation_id = aws_eip.nat_1.id
   subnet_id     = aws_subnet.public_1.id
+  depends_on = [aws_internet_gateway.main]
 
   tags = {
     Name = "techcorp-nat-gw-1"
@@ -108,6 +125,7 @@ resource "aws_nat_gateway" "nat_1" {
 resource "aws_nat_gateway" "nat_2" {
   allocation_id = aws_eip.nat_2.id
   subnet_id     = aws_subnet.public_2.id
+  depends_on = [aws_internet_gateway.main]
 
   tags = {
     Name = "techcorp-nat-gw-2"
@@ -250,8 +268,8 @@ resource "aws_security_group" "database" {
   vpc_id      = aws_vpc.main.id
 
   ingress {
-    from_port       = 5432
-    to_port         = 5432
+    from_port       = 3306
+    to_port         = 3306
     protocol        = "tcp"
     security_groups = [aws_security_group.web.id]
     description     = "PostgreSQL from web servers"
@@ -278,71 +296,6 @@ resource "aws_security_group" "database" {
   }
 }
 
-resource "aws_security_group" "alb" {
-  name        = "techcorp-alb-sg"
-  description = "Security group for application load balancer"
-  vpc_id      = aws_vpc.main.id
-
-  ingress {
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-    description = "HTTP from anywhere"
-  }
-
-  ingress {
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-    description = "HTTPS from anywhere"
-  }
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-    description = "Allow all outbound"
-  }
-
-  tags = {
-    Name = "techcorp-alb-sg"
-  }
-}
-
-# Data source for availability zones
-data "aws_availability_zones" "available" {
-  state = "available"
-}
-
-# Data source for latest Amazon Linux 2 AMI
-data "aws_ami" "amazon_linux_2" {
-  most_recent = true
-  owners      = ["amazon"]
-
-  filter {
-    name   = "name"
-    values = ["amzn2-ami-hvm-*-x86_64-gp2"]
-  }
-
-  filter {
-    name   = "virtualization-type"
-    values = ["hvm"]
-  }
-}
-
-# Elastic IP for Bastion
-resource "aws_eip" "bastion" {
-  domain   = "vpc"
-  instance = aws_instance.bastion.id
-
-  tags = {
-    Name = "techcorp-bastion-eip"
-  }
-}
-
 # Bastion Host
 resource "aws_instance" "bastion" {
   ami                    = data.aws_ami.amazon_linux_2.id
@@ -364,6 +317,20 @@ resource "aws_instance" "bastion" {
   }
 }
 
+
+# Elastic IP for Bastion
+resource "aws_eip" "bastion" {
+  domain   = "vpc"
+  instance = aws_instance.bastion.id
+  depends_on = [aws_internet_gateway.main]
+
+  tags = {
+    Name = "techcorp-bastion-eip"
+  }
+}
+
+
+
 # Web Servers
 resource "aws_instance" "web_1" {
   ami                    = data.aws_ami.amazon_linux_2.id
@@ -372,9 +339,8 @@ resource "aws_instance" "web_1" {
   vpc_security_group_ids = [aws_security_group.web.id]
   key_name               = var.key_pair_name
 
-  user_data = templatefile("${path.module}/user_data/webserver.sh", {
-    instance_name = "web-server-1"
-  })
+  user_data = file("${path.module}/user_data/webserver.sh")
+  
 
   tags = {
     Name = "techcorp-web-1"
@@ -387,10 +353,7 @@ resource "aws_instance" "web_2" {
   subnet_id              = aws_subnet.private_2.id
   vpc_security_group_ids = [aws_security_group.web.id]
   key_name               = var.key_pair_name
-
-  user_data = templatefile("${path.module}/user_data/webserver.sh", {
-    instance_name = "web-server-2"
-  })
+  user_data = file("${path.module}/user_data/webserver.sh")
 
   tags = {
     Name = "techcorp-web-2"
@@ -412,12 +375,13 @@ resource "aws_instance" "database" {
   }
 }
 
+
 # Application Load Balancer
 resource "aws_lb" "web" {
   name               = "techcorp-alb"
   internal           = false
   load_balancer_type = "application"
-  security_groups    = [aws_security_group.alb.id]
+  security_groups    = [aws_security_group.web.id]
   subnets            = [aws_subnet.public_1.id, aws_subnet.public_2.id]
 
   tags = {
@@ -436,7 +400,7 @@ resource "aws_lb_target_group" "web" {
     enabled             = true
     healthy_threshold   = 2
     interval            = 30
-    matcher             = "200-399"
+    matcher             = "200"
     path                = "/"
     port                = "traffic-port"
     protocol            = "HTTP"
